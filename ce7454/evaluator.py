@@ -10,9 +10,12 @@ class Evaluator:
         self,
         net: nn.Module,
         k: int,
+        is_fp16: bool = False,
     ):
         self.net = net
         self.k = k
+        self.is_fp16 = is_fp16
+        self.total_steps = 0
 
     def eval_recall(
         self,
@@ -23,17 +26,18 @@ class Evaluator:
         pred_list, gt_list = [], []
         with torch.no_grad():
             for batch in data_loader:
-                data = batch['data'].cuda()
-                logits = self.net(data)
-                prob = torch.sigmoid(logits)
-                target = batch['soft_label'].cuda()
-                loss = F.binary_cross_entropy(prob, target, reduction='sum')
+                data = batch[0].cuda()
+                with torch.autocast(device_type='cuda', dtype=torch.float16, enabled=self.is_fp16):
+                    logits = self.net(data)
+                    prob = torch.sigmoid(logits)
+                    target = batch[1].cuda()
+                    loss = F.binary_cross_entropy_with_logits(prob, target, reduction='sum')
                 loss_avg += float(loss.data)
                 # gather prediction and gt
                 pred = torch.topk(prob.data, self.k)[1]
                 pred = pred.cpu().detach().tolist()
                 pred_list.extend(pred)
-                for soft_label in batch['soft_label']:
+                for soft_label in batch[1]:
                     gt_label = (soft_label == 1).nonzero(as_tuple=True)[0]\
                                 .cpu().detach().tolist()
                     gt_list.append(gt_label)
@@ -67,7 +71,7 @@ class Evaluator:
         pred_list = []
         with torch.no_grad():
             for batch in data_loader:
-                data = batch['data'].cuda()
+                data = batch[0].cuda()
                 logits = self.net(data)
                 prob = torch.sigmoid(logits)
                 pred = torch.topk(prob.data, self.k)[1]
